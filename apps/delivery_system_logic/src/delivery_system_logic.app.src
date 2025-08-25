@@ -1,8 +1,8 @@
-{application, delivery_system, [
+{application, delivery_system_logic, [
     {description, "An OTP application"},
     {vsn, "0.1.0"},
     {registered, []},
-    {mod, {delivery_system_app, []}},
+    {mod, {delivery_system_logic_app, []}},
     {applications, [
         kernel,
         stdlib

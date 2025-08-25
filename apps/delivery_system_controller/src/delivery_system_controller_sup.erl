@@ -41,26 +41,6 @@ init([]) ->
             start => {db_worker, start_link, []},
             restart => permanent,
             type => worker
-        },
-
-        %remote supervisors
-        #{
-            id => delivery_system_logic_sup,
-            start => {delivery_system_logic_sup, start_link, []},
-            restart => permanent,
-            type => supervisor 
-        },
-        #{
-            id => delivery_system_orders_sup,
-            start => {delivery_system_orders_sup, start_link, []},
-            restart => permanent,
-            type => supervisor
-        },
-        #{
-            id => delivery_system_ui_sup,
-            start => {delivery_system_ui_sup, start_link, []},
-            restart => permanent,
-            type => supervisor
         }
     ],
 

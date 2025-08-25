@@ -18,28 +18,37 @@ start_link() ->
 
 
 init([]) ->
-    %supervisor flags
+    % Supervisor flags
     SupFlags = #{
         strategy => one_for_one,
         intensity => 5,
         period => 10
     },
 
-    %child specifications
+
+
+     % Creates an initial list of couriers (currently "dummy", will be read from config file later)
+    InitialCouriers = [
+        #{id => courier_1, location => {10, 20}},
+        #{id => courier_2, location => {50, 60}},
+        #{id => courier_3, location => {30, 45}}
+    ],
+
+    % Child specifications
     ChildSpecs = [
 
-        %manager of couriers
+        % Manager of couriers
         #{
             id => courier_manager,
-            start => {courier_manager, start_link, []},
+            start => {courier_manager, start_link, [InitialCouriers]},
             restart => permanent,
             type => worker
         },
 
-        %dynamic supervisor - its role will be to manage all individual courier processes.
+        % Dynamic supervisor - its role will be to manage all individual courier processes.
         #{
             id => courier_process_sup,
-            start => {courier_process_sup, start_link, []},
+            start => {courier_process_sup, start_link, [InitialCouriers]},
             restart => permanent,
             type => supervisor
         }

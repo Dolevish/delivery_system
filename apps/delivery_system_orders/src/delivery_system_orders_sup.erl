@@ -7,7 +7,7 @@
 
 -behaviour(supervisor).
 
--export([start_link/0]).
+-export([start_link/0, start_order_process/1]).
 
 -export([init/1]).
 
@@ -48,3 +48,11 @@ init([]) ->
     {ok, {SupFlags, ChildSpecs}}.
 
 
+%% API function to dynamically start a new order_process child.
+start_order_process(OrderData) ->
+    ChildSpec = #{
+        id => {order_process, maps:get(id, OrderData)}, % Unique ID for the child
+        start => {order_process, start_link, [OrderData]},
+        restart => transient
+    },
+    supervisor:start_child(?MODULE, ChildSpec).

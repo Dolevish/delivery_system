@@ -1,6 +1,5 @@
 %%%-------------------------------------------------------------------
-%% @doc order_process_sup - dynamic supervisor for managing individual order processes.
-%% @end
+%% Order_process_sup - dynamic supervisor for managing individual order processes.
 %%%-------------------------------------------------------------------
 -module(order_process_sup).
 -behaviour(supervisor).
@@ -12,16 +11,17 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
-    % supervisor flags
+    % Supervisor flags
     SupFlags = #{
         strategy => simple_one_for_one
     },
 
-    % child template for dynamically created order processes
+    % Child template for dynamically created order processes
     ChildTemplate = #{
-        id => order_process, % generic identifier
+        id => order_process, % Generic identifier
         start => {order_process, start_link, []}, 
-        restart => transient % restart only if the crash was not normal
+        restart => transient % Restart only if the crash was not normal
     },
 
     {ok, {SupFlags, [ChildTemplate]}}.
+

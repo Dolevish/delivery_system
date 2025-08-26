@@ -36,14 +36,20 @@ handle_cast(_Msg, State) ->
 handle_info(generate_order, State = #{order_counter := Counter}) ->
     NewCounter = Counter + 1,
     NewOrderID = erlang:unique_integer([positive]), % Create a unique order ID
-    % Generate random pickup and dropoff locations
+
+    %% Generate random locations for business and customer
+    BusinessLocation = {rand:uniform(100), rand:uniform(100)},
+    CustomerLocation = {rand:uniform(100), rand:uniform(100)},
+    
+    % Generate order data with business and customer locations
     OrderData = #{
         id => NewOrderID,
-        pickup_location => {rand:uniform(100), rand:uniform(100)},
-        dropoff_location => {rand:uniform(100), rand:uniform(100)}
+        business_location => BusinessLocation,
+        customer_location => CustomerLocation
     },
 
-    io:format("Order generator: Creating and queuing order ~p~n", [NewOrderID]),
+    io:format("Order generator: Creating order ~p (Business: ~p, Customer: ~p)~n", 
+              [NewOrderID, BusinessLocation, CustomerLocation]),
 
     %% Send an asynchronous message to the "courier_manager" to add the new order to its queue.
     courier_manager:add_to_queue(OrderData),
@@ -52,7 +58,6 @@ handle_info(generate_order, State = #{order_counter := Counter}) ->
     erlang:send_after(?GENERATION_INTERVAL_MS, self(), generate_order),
     
     {noreply, State#{order_counter => NewCounter}};
-
 handle_info(_Info, State) ->
     {noreply, State}.
 

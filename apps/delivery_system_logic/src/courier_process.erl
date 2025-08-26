@@ -45,32 +45,37 @@ init([CourierID]) ->
 
 
 %% Handles events when the courier is in the 'available' state.
-available({call, From}, {assign_job, JobData}, Data) ->
+available(cast, {assign_job, JobData}, Data) ->
     %% Extract relevant information from JobData.
     CourierID = maps:get(id, Data),
     OrderID = maps:get(order_id, JobData),
     BusinessLocation = maps:get(business_location, JobData),
     CustomerLocation = maps:get(customer_location, JobData),
+    CurrentLocation = maps:get(location, Data),
     
-    io:format("Courier ~p assigned to order ~p~n", [CourierID, OrderID]),
+    io:format("Courier ~p assigned to order ~p, driving to business at ~p~n", 
+              [CourierID, OrderID, BusinessLocation]),
 
-    gen_statem:reply(From, ok),
+    %% Calculate travel time to the business
+    TravelTime = calculate_travel_time(CurrentLocation, BusinessLocation),
+
+    %% Start driving to business - send ourselves a message when we arrive
+    erlang:send_after(TravelTime, self(), arrived_at_business),
 
     %% Transition to the next state: driving to business.
     %% Update the internal Data with the job details.
     NewData = Data#{
-            order_id => OrderID, 
-            destination => BusinessLocation, 
-            final_destination => CustomerLocation
+        order_id => OrderID, 
+        business_location => BusinessLocation, 
+        customer_location => CustomerLocation
     },
-
-    %% כאן נוסיף בעתיד את הלוגיקה שמתחילה את תנועת הסימולציה
     
     {next_state, driving_to_business, NewData};
 
 available(EventType, EventContent, Data) ->
     %% Handle unexpected events in this state.
-    io:format("Unhandled event in 'available' state: ~p, ~p~n", [EventType, EventContent]),
+    io:format("Courier ~p: Unhandled event in 'available' state: ~p, ~p~n", 
+              [maps:get(id, Data), EventType, EventContent]),
     {keep_state, Data}.
 
 
@@ -78,14 +83,30 @@ available(EventType, EventContent, Data) ->
 
 %% Handles events when the courier is en route to the business.
 driving_to_business(info, arrived_at_business, Data) ->
-    io:format("Courier ~p arrived at business for order ~p~n", [maps:get(id, Data), maps:get(order_id, Data)]),
+    CourierID = maps:get(id, Data),
+    OrderID = maps:get(order_id, Data),
+    BusinessLocation = maps:get(business_location, Data),
+    CustomerLocation = maps:get(customer_location, Data),
+    
+    io:format("Courier ~p arrived at business for order ~p, now driving to customer at ~p~n", 
+              [CourierID, OrderID, CustomerLocation]),
+    
+    %% Update current location to business
+    UpdatedData = maps:put(location, BusinessLocation, Data),
+
+    %% Calculate travel time to customer
+    TravelTime = calculate_travel_time(BusinessLocation, CustomerLocation),
+
+    %% Start driving to customer - send ourselves a message when we arrive
+    erlang:send_after(TravelTime, self(), arrived_at_customer),
+    
     %% Transition to the next state: driving to customer.
-    NewData = maps:put(dest, maps:get(final_dest, Data), Data),
-    {next_state, driving_to_customer, NewData};
+    {next_state, driving_to_customer, UpdatedData};
 
 driving_to_business(EventType, EventContent, Data) ->
     %% Handle unexpected events in this state.
-    io:format("Unhandled event in 'driving_to_business' state: ~p, ~p~n", [EventType, EventContent]),
+    io:format("Courier ~p: Unhandled event in 'driving_to_business' state: ~p, ~p~n", 
+              [maps:get(id, Data), EventType, EventContent]),
     {keep_state, Data}.
 
 
@@ -93,16 +114,30 @@ driving_to_business(EventType, EventContent, Data) ->
 
 %% Handles events when the courier is en route to the customer.
 driving_to_customer(info, arrived_at_customer, Data) ->
-    io:format("Courier ~p delivered order ~p~n", [maps:get(id, Data), maps:get(order_id, Data)]),
-    %% Here, the process will notify the courier_manager that it has finished.
-    courier_manager:release_courier(maps:get(id, Data)),
+    CourierID = maps:get(id, Data),
+    OrderID = maps:get(order_id, Data),
+    CustomerLocation = maps:get(customer_location, Data),
+    
+    io:format("Courier ~p delivered order ~p successfully!~n", [CourierID, OrderID]),
 
+    %% Update current location to customer
+    UpdatedData = maps:put(location, CustomerLocation, Data),
+
+    %% Notify the courier manager that the courier is available
+    courier_manager:release_courier(CourierID),
+
+    %% Return to available state and clear order details
+    CleanData = maps:remove(order_id, 
+                 maps:remove(business_location, 
+                  maps:remove(customer_location, UpdatedData))),
+    
     %% Transition back to the initial state, ready for the next task.
-    {next_state, available, maps:remove(order_id, Data)};
+    {next_state, available, CleanData};
 
 driving_to_customer(EventType, EventContent, Data) ->
     %% Handle unexpected events in this state.
-    io:format("Unhandled event in 'driving_to_customer' state: ~p, ~p~n", [EventType, EventContent]),
+    io:format("Courier ~p: Unhandled event in 'driving_to_customer' state: ~p, ~p~n", 
+              [maps:get(id, Data), EventType, EventContent]),
     {keep_state, Data}.
 
 
@@ -111,3 +146,23 @@ driving_to_customer(EventType, EventContent, Data) ->
 %% Called when the process terminates.
 terminate(_Reason, _State, _Data) ->
     ok.
+
+
+%% ===================================================================
+%% Helper functions
+%% ===================================================================
+
+%% Calculate distance between two points
+calculate_distance({X1, Y1}, {X2, Y2}) ->
+    math:sqrt(math:pow(X2 - X1, 2) + math:pow(Y2 - Y1, 2)).
+
+%% Calculate travel time (in milliseconds) - more distance = more time
+%% Each distance unit = 200 milliseconds + random up to 100 milliseconds
+calculate_travel_time(From, To) ->
+    Distance = calculate_distance(From, To),
+    BaseTime = round(Distance * 200), % 200ms per distance unit
+    RandomDelay = rand:uniform(100), % up to 100ms random
+    MaxTime = max(BaseTime + RandomDelay, 1000), % minimum 1 second
+    io:format("Travel time from ~p to ~p: ~p ms (distance: ~.2f)~n", 
+              [From, To, MaxTime, Distance]),
+    MaxTime.

@@ -53,8 +53,11 @@ init(InitialCouriers) ->
     AvailableTID = ets:new(available_couriers, [set, named_table, public]),
     BusyTID = ets:new(busy_couriers, [set, named_table, public]),
 
-    %% Insert initial couriers into the available couriers table.
-    [ets:insert(AvailableTID, {courier, CourierData}) || CourierData <- InitialCouriers],
+    %% Add initial couriers to the available table - each with a unique key.
+    lists:foreach(fun(CourierData) ->
+        CourierID = maps:get(id, CourierData),
+        ets:insert(AvailableTID, {CourierID, CourierData})  % Unique key.
+    end, InitialCouriers),
 
     io:format("Courier manager started with ~p couriers.~n", [length(InitialCouriers)]),
 
@@ -77,6 +80,7 @@ handle_call(_Request, _From, State) ->
 %% Adding a new order to the waiting queue.
 handle_cast({add_to_queue, OrderData}, State = #state{waiting_orders = Q}) ->
     io:format("Courier manager: Adding order ~p to the waiting queue.~n", [maps:get(id, OrderData)]),
+    
     %% Adding the new order to the end of the queue.
     NewQ = queue:in(OrderData, Q),
     NewState = State#state{waiting_orders = NewQ},
@@ -88,22 +92,21 @@ handle_cast({add_to_queue, OrderData}, State = #state{waiting_orders = Q}) ->
 handle_cast({release_courier, CourierID}, State = #state{available_tid = AvailTID, busy_tid = BusyTID}) ->
     io:format("Courier manager: Courier ~p has been released.~n", [CourierID]),
 
-    %% Look for the courier in the busy table.
-    case ets:match_object(BusyTID, {courier, #{id => CourierID}, '_'}) of
-        [FullBusyRecord | _] ->
-            %% If found, remove from busy table.
-            ets:delete_object(BusyTID, FullBusyRecord),
+    %% Searching for the courier in the busy table
+    case ets:lookup(BusyTID, CourierID) of
+        [{CourierID, CourierData, _OrderID}] ->  
+            %% Found the courier - removing from the busy table
+            ets:delete(BusyTID, CourierID),
 
-            %% Extract the courier data from the record.
-            {courier, CourierData, _OrderID} = FullBusyRecord,
+            %% Adding back to the available table
+            ets:insert(AvailTID, {CourierID, CourierData}),
 
-            %% Insert back into the available table.
-            ets:insert(AvailTID, {courier, CourierData}),
+            io:format("Courier manager: Courier ~p is now available for new orders.~n", [CourierID]),
 
-            %% Immediately after adding, we try to dispatch it to a new task.
+            %% Trying to dispatch the courier for a new task from the queue
             try_dispatch(State);
         [] ->
-            %% Edge case: We didn't find such a courier. This shouldn't happen.
+            %% Could not find the courier
             io:format("Warning: Could not find courier ~p in busy table to release.~n", [CourierID]),
             try_dispatch(State)
     end;
@@ -131,43 +134,65 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% Attempts to dispatch available couriers to waiting orders.
 try_dispatch(State = #state{waiting_orders = Q}) ->
-    %% Check if there are both available couriers and waiting orders.
-    case {ets:first(available_couriers), queue:is_empty(Q)} of
-        {'$end_of_table', _} ->
-            %% No available couriers, nothing to do.
+    %% Check if there are any waiting orders
+    case queue:is_empty(Q) of
+        true ->
+            %% No waiting orders
+            NumAvailable = ets:info(available_couriers, size),
+            if 
+                NumAvailable > 0 ->
+                    io:format("Courier manager: ~p couriers available, no orders in queue~n", [NumAvailable]);
+                true -> ok
+            end,
             {noreply, State};
+        false ->
+            %% There are waiting orders - looking for an available courier
+            case ets:tab2list(available_couriers) of
+                [] ->
+                    %% No available couriers
+                    QueueLength = queue:len(Q),
+                    io:format("Courier manager: No available couriers, orders waiting in queue: ~p~n", [QueueLength]),
+                    {noreply, State};
+                [{FirstCourierID, CourierData} | _] -> 
+                    %% There is at least one available courier - take the first one
 
-        {_, true} ->
-            %% There are available couriers but no waiting orders, nothing to do.
-            {noreply, State};
+                    %% Remove the first order from the queue (FIFO)
+                    {{value, OrderData}, NewQ} = queue:out(Q),
 
-        {CourierKey, false} ->
-            %% There is both an available courier and a waiting order
+                    %% Move the courier from available to busy
+                    ets:delete(available_couriers, FirstCourierID),  % Delete by key
+                    ets:insert(busy_couriers, {FirstCourierID, CourierData, maps:get(id, OrderData)}),
 
-            %% Remove the first order from the queue.
-            {{value, OrderData}, NewQ} = queue:out(Q),
+                    CourierID = maps:get(id, CourierData),
+                    OrderID = maps:get(id, OrderData),
+                    
+                    io:format("Courier manager: Dispatching courier ~p for order ~p.~n", [CourierID, OrderID]),
 
-            %% Retrieve the courier details.
-            [{courier, CourierData}] = ets:lookup(available_couriers, CourierKey),
+                    %% Create job data for the courier
+                    JobData = #{
+                        order_id => OrderID,
+                        business_location => maps:get(business_location, OrderData),
+                        customer_location => maps:get(customer_location, OrderData)
+                    },
 
-            %% Reserve the courier.
-            ets:delete(available_couriers, CourierKey),
-            ets:insert(busy_couriers, {courier, CourierData, maps:get(id, OrderData)}),
+                    %% Send job data to the courier process
+                    case whereis(CourierID) of
+                        undefined ->
+                            io:format("Error: Courier process ~p not found!~n", [CourierID]),
+                            %% Return the courier to available and the order to the queue
+                            ets:insert(available_couriers, {FirstCourierID, CourierData}),
+                            ets:delete(busy_couriers, {FirstCourierID, CourierData, OrderID}),
+                            NewStateWithOrder = State#state{waiting_orders = queue:in_r(OrderData, NewQ)},
+                            {noreply, NewStateWithOrder};
+                        CourierPid ->
+                            %% Send message to the courier process
+                            gen_statem:cast(CourierPid, {assign_job, JobData}),
 
-            io:format("Courier manager: Dispatching courier ~p for order ~p.~n", [maps:get(id, CourierData), maps:get(id, OrderData)]),
+                            %% Update the state with the new queue
+                            NewState = State#state{waiting_orders = NewQ},
 
-            %% Start the order process:
-
-            %% Merge order and courier data
-            CourierID = maps:get(id, CourierData),
-            CombinedData = maps:merge(OrderData, #{courier_id => CourierID}),
-
-            %% Order process supervisor starts a new process.
-            {ok, _Pid} = delivery_system_orders_sup:start_order_process(CombinedData),
-
-            %% Update the internal state of the dispatcher with the new queue.
-            NewState = State#state{waiting_orders = NewQ},
-
-            %% We call the function again recursively to see if we can dispatch more couriers to additional orders.
-            try_dispatch(NewState)
+                            %% Call the function again to check for more couriers and orders
+                            try_dispatch(NewState)
+                    end
+            end
     end.

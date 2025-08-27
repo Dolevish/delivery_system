@@ -153,17 +153,18 @@ try_dispatch(State = #state{waiting_orders = Q}) ->
                     QueueLength = queue:len(Q),
                     io:format("Courier manager: No available couriers, orders waiting in queue: ~p~n", [QueueLength]),
                     {noreply, State};
-                [{FirstCourierID, CourierData} | _] -> 
+                [{CourierID, CourierData} | _] -> 
+                    %% FIX: השתמש באותו מזהה עקבי - CourierID הוא המפתח בטבלה
                     %% There is at least one available courier - take the first one
 
                     %% Remove the first order from the queue (FIFO)
                     {{value, OrderData}, NewQ} = queue:out(Q),
 
                     %% Move the courier from available to busy
-                    ets:delete(available_couriers, FirstCourierID),  % Delete by key
-                    ets:insert(busy_couriers, {FirstCourierID, CourierData, maps:get(id, OrderData)}),
+                    ets:delete(available_couriers, CourierID),  % Delete by key
+                    ets:insert(busy_couriers, {CourierID, CourierData, maps:get(id, OrderData)}),
 
-                    CourierID = maps:get(id, CourierData),
+                    %% FIX: השתמש ב-CourierID שהוא כבר המפתח, לא צריך לחלץ אותו שוב
                     OrderID = maps:get(id, OrderData),
                     
                     io:format("Courier manager: Dispatching courier ~p for order ~p.~n", [CourierID, OrderID]),
@@ -180,8 +181,9 @@ try_dispatch(State = #state{waiting_orders = Q}) ->
                         undefined ->
                             io:format("Error: Courier process ~p not found!~n", [CourierID]),
                             %% Return the courier to available and the order to the queue
-                            ets:insert(available_couriers, {FirstCourierID, CourierData}),
-                            ets:delete(busy_couriers, {FirstCourierID, CourierData, OrderID}),
+                            ets:insert(available_couriers, {CourierID, CourierData}),
+                            %% FIX: תיקון המחיקה - מוחקים רק עם המפתח
+                            ets:delete(busy_couriers, CourierID),
                             NewStateWithOrder = State#state{waiting_orders = queue:in_r(OrderData, NewQ)},
                             {noreply, NewStateWithOrder};
                         CourierPid ->

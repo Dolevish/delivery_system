@@ -34,10 +34,10 @@ callback_mode() ->
 %% Initializes the state machine with the given CourierData.
 init([CourierData]) ->
     CourierID = maps:get(id, CourierData),
-    InitialLocation = maps:get(location, CourierData, {0, 0}), 
-    
-    io:format("Courier statem ~p started at location ~p.~n", [CourierID, InitialLocation]),
-    
+    InitialLocation = maps:get(location, CourierData, {0, 0}),
+
+    io:format("Courier available ~p started at location ~p.~n", [CourierID, InitialLocation]),
+
     %% The initial state is 'available'.
     %% The state's Data will contain information about the courier including the initial location.
     {ok, available, #{id => CourierID, location => InitialLocation}}.
@@ -52,13 +52,15 @@ init([CourierData]) ->
 
 %% Handles events when the courier is in the 'available' state.
 available(cast, {assign_job, JobData}, Data) ->
-    %% Extract relevant information from JobData.
+    %% Get current id and location
     CourierID = maps:get(id, Data),
+    CurrentLocation = maps:get(location, Data),
+
+    %% Extract relevant information from JobData.
     OrderID = maps:get(order_id, JobData),
     BusinessLocation = maps:get(business_location, JobData),
     CustomerLocation = maps:get(customer_location, JobData),
-    CurrentLocation = maps:get(location, Data),
-    
+
     io:format("Courier ~p assigned to order ~p, driving from ~p to business at ~p~n", 
               [CourierID, OrderID, CurrentLocation, BusinessLocation]),
 
@@ -89,6 +91,7 @@ available(EventType, EventContent, Data) ->
 
 %% Handles events when the courier is en route to the business.
 driving_to_business(info, arrived_at_business, Data) ->
+    %% Get current information
     CourierID = maps:get(id, Data),
     OrderID = maps:get(order_id, Data),
     BusinessLocation = maps:get(business_location, Data),
@@ -120,6 +123,7 @@ driving_to_business(EventType, EventContent, Data) ->
 
 %% Handles events when the courier is en route to the customer.
 driving_to_customer(info, arrived_at_customer, Data) ->
+    %% Get current information
     CourierID = maps:get(id, Data),
     OrderID = maps:get(order_id, Data),
     CustomerLocation = maps:get(customer_location, Data),

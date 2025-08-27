@@ -103,6 +103,7 @@ handle_cast({add_to_queue, OrderData}, State = #state{waiting_orders = Q}) ->
     %% Immediately after adding, try to dispatch a courier.
     try_dispatch(NewState);
 
+
 %% Releases a courier and makes it available for new tasks.
 handle_cast({release_courier, CourierID}, State = #state{available_tid = AvailTID, busy_tid = BusyTID, monitors = Monitors}) ->
     io:format("Courier manager: Courier ~p has been released.~n", [CourierID]),
@@ -138,7 +139,9 @@ handle_cast({release_courier, CourierID}, State = #state{available_tid = AvailTI
             try_dispatch(NewState);
         [] ->
             %% Could not find the courier
+            io:format("*******************************************************************~n"),
             io:format("Warning: Could not find courier ~p in busy table to release.~n", [CourierID]),
+            io:format("*******************************************************************~n"),
             NewState = State#state{monitors = NewMonitors},
             try_dispatch(NewState)
     end;
@@ -177,7 +180,7 @@ handle_info({'DOWN', MonRef, process, _Pid, Reason},
                     case ets:lookup(active_orders, OrderID) of
                         [{OrderID, OrderData}] ->
                             %% Return the order to the front of the queue (high priority)
-                            NewQ = queue:in_r(OrderData, State#state.waiting_orders),
+                            NewQ = queue:in_r(OrderData, State#state.waiting_orders), %%Insert at the front
                             ets:delete(active_orders, OrderID),
                             io:format("Order ~p returned to queue for reassignment.~n", [OrderID]),
                             NewStateWithOrder = State#state{waiting_orders = NewQ},
@@ -234,7 +237,7 @@ try_dispatch(State = #state{waiting_orders = Q, monitors = Monitors}) ->
             {noreply, State};
         false ->
             %% There are waiting orders - looking for an available courier
-            case ets:tab2list(available_couriers) of
+            case ets:tab2list(available_couriers) of  %פעולה יקרה - לשנות בעתיד עלולה לתקוע את המערכת
                 [] ->
                     %% No available couriers
                     QueueLength = queue:len(Q),
@@ -246,12 +249,12 @@ try_dispatch(State = #state{waiting_orders = Q, monitors = Monitors}) ->
                     %% Remove the first order from the queue (FIFO)
                     {{value, OrderData}, NewQ} = queue:out(Q),
 
+                    OrderID = maps:get(id, OrderData),
+
                     %% Move the courier from available to busy
                     ets:delete(available_couriers, CourierID),
-                    ets:insert(busy_couriers, {CourierID, CourierData, maps:get(id, OrderData)}),
+                    ets:insert(busy_couriers, {CourierID, CourierData, OrderID}),
 
-                    OrderID = maps:get(id, OrderData),
-                    
                     io:format("Courier manager: Dispatching courier ~p for order ~p.~n", [CourierID, OrderID]),
 
                     %% Create job data for the courier
@@ -274,7 +277,7 @@ try_dispatch(State = #state{waiting_orders = Q, monitors = Monitors}) ->
                             %% Save the order in the active_orders table
                             ets:insert(active_orders, {OrderID, OrderData}),
 
-                            %% New: Create a monitor for the courier process
+                            %% Create a monitor for the courier process
                             MonRef = erlang:monitor(process, CourierPid),
                             NewMonitors = maps:put(MonRef, CourierID, Monitors),
                             

@@ -58,6 +58,8 @@ handle_info(generate_order, State = #{order_counter := Counter}) ->
     erlang:send_after(?GENERATION_INTERVAL_MS, self(), generate_order),
     
     {noreply, State#{order_counter => NewCounter}};
+
+
 handle_info(_Info, State) ->
     {noreply, State}.
 

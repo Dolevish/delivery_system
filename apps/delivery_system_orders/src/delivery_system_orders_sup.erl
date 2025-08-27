@@ -18,16 +18,16 @@ start_link() ->
 
 
 init([]) ->
-    % supervisor flags
+    %% supervisor flags
     SupFlags = #{
         strategy => one_for_one,
         intensity => 5,
         period => 10
     },
 
-    % child specifications
+    %% child specifications
     ChildSpecs = [
-        % order_generator responsible for creating new orders
+        %% order_generator responsible for creating new orders
         #{
             id => order_generator,
             start => {order_generator, start_link, []},

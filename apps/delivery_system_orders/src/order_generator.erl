@@ -20,7 +20,7 @@ start_link() ->
 init([]) ->
     io:format("Order generator started.~n"),
     %% Start the timer to generate the first order immediately.
-     erlang:send_after(0, self(), generate_order),
+     %erlang:send_after(0, self(), generate_order),
     {ok, #{order_counter => 0}}. % Number of orders generated.
 
 

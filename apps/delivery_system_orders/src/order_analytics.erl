@@ -236,7 +236,7 @@ update_completed_stats(Stats, OrderData) ->
     HeatMap = update_location_heat_map(Stats#stats.location_heat_map, CustomerLoc),
     
     %% עדכון ביצועי שליח
-    CourierID = maps:get(assigned_courier, OrderData),
+    CourierID = maps:get(assigned_courier, OrderData, undefined),
     CourierPerf = update_courier_performance(
         Stats#stats.courier_performance, 
         CourierID, 
@@ -280,11 +280,13 @@ update_failed_stats(Stats, OrderData) ->
 %% עדכון מפת חום של מיקומים
 update_location_heat_map(HeatMap, {X, Y}) ->
     %% עיגול לגריד של 10x10
-    GridX = (X div 10) * 10,
-    GridY = (Y div 10) * 10,
+    GridX = (round(X) div 10) * 10,
+    GridY = (round(Y) div 10) * 10,
     maps:update_with({GridX, GridY}, fun(V) -> V + 1 end, 1, HeatMap).
 
 %% עדכון ביצועי שליח
+update_courier_performance(PerfMap, undefined, _DeliveryTime, _Status) ->
+    PerfMap; % אל תעשה כלום אם אין שליח משויך
 update_courier_performance(PerfMap, CourierID, DeliveryTime, Status) ->
     CourierStats = maps:get(CourierID, PerfMap, #{
         completed => 0,

@@ -381,7 +381,7 @@ process_validated_order(ValidatedOrder) ->
     courier_manager:add_to_queue(ValidatedOrder),
     
     %% עדכון אנליטיקה
-    order_analytics:update_order_completed(ValidatedOrder#{status => queued}),
+    %order_analytics:update_order_completed(ValidatedOrder#{status => queued}),
     
     io:format("Order generator: Order ~p validated and queued successfully.~n", 
               [maps:get(id, ValidatedOrder)]).

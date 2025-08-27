@@ -9,36 +9,8 @@
 -export([find_nearest_road_point/2, is_valid_location/2]).
 
 %% מבני נתונים
--record(city, {
-    roads = [],           % רשימת כבישים
-    houses = [],          % רשימת בתים
-    businesses = [],      % רשימת בתי עסק
-    intersections = [],   % צמתים
-    grid_size = {800, 600} % גודל המפה
-}).
+-include("city_generator.hrl").
 
--record(road, {
-    id,
-    type,        % main, secondary, residential
-    start_point,
-    end_point,
-    width
-}).
-
--record(house, {
-    id,
-    location,
-    address,
-    size = small  % small, medium, large
-}).
-
--record(business, {
-    id,
-    location,
-    name,
-    type,  % restaurant, shop, gas_station, etc.
-    size = medium
-}).
 
 %% ===================================================================
 %% API
@@ -59,55 +31,54 @@ generate_city(Config) ->
     Height = maps:get(height, Config, 600),
     NumHouses = maps:get(num_houses, Config, 100),
     NumBusinesses = maps:get(num_businesses, Config, 5),
-    
+
     io:format("~nיוצר עיר חדשה...~n"),
-    io:format("גודל: ~px~p, בתים: ~p, בתי עסק: ~p~n", 
+    io:format("גודל: ~px~p, בתים: ~p, בתי עסק: ~p~n",
               [Width, Height, NumHouses, NumBusinesses]),
-    
+
     %% שלב 1: יצירת רשת כבישים
     {Roads, Intersections} = generate_road_network(Width, Height),
-    io:format("✓ נוצרו ~p כבישים ו-~p צמתים~n", 
+    io:format("✓ נוצרו ~p כבישים ו-~p צמתים~n",
               [length(Roads), length(Intersections)]),
-    
+
     %% שלב 2: יצירת אזורי מגורים ומסחר
     Zones = create_zones(Width, Height),
-    
+
     %% שלב 3: פיזור בתי עסק
     Businesses = place_businesses(NumBusinesses, Roads, Zones, Width, Height),
     io:format("✓ מוקמו ~p בתי עסק~n", [length(Businesses)]),
-    
+
     %% שלב 4: פיזור בתים
     Houses = place_houses(NumHouses, Roads, Businesses, Zones, Width, Height),
     io:format("✓ נבנו ~p בתים~n", [length(Houses)]),
-    
-    %% שמירת הנתונים ב-ETS לגישה גלובלית
-    save_city_data(#city{
+
+    %% הרכבת מבנה העיר
+    City = #city{
         roads = Roads,
         houses = Houses,
         businesses = Businesses,
         intersections = Intersections,
         grid_size = {Width, Height}
-    }),
-    
+    },
+
+    %% שמירת הנתונים ב-ETS לגישה גלובלית
+    save_city_data(City),
+
     io:format("✓ העיר נוצרה בהצלחה!~n~n"),
-    
-    #{
-        roads => Roads,
-        houses => Houses,
-        businesses => Businesses,
-        intersections => Intersections
-    }.
+
+    City.
+
 
 %% קבלת נתוני העיר השמורים
 get_city_data() ->
     case ets:info(city_data) of
-        undefined -> 
+        undefined ->
             generate_city(), % צור עיר אם אין
             get_city_data();
         _ ->
             case ets:lookup(city_data, current_city) of
                 [{current_city, City}] -> City;
-                [] -> 
+                [] ->
                     generate_city(),
                     get_city_data()
             end
@@ -162,18 +133,18 @@ generate_road_network(Width, Height) ->
             width = 40
         }
     ],
-    
+
     %% רחובות משניים - יוצרים רשת
     SecondaryRoads = generate_secondary_roads(Width, Height),
-    
+
     %% רחובות מגורים - רחובות קטנים בשכונות
     ResidentialRoads = generate_residential_roads(Width, Height),
-    
+
     AllRoads = MainRoads ++ SecondaryRoads ++ ResidentialRoads,
-    
+
     %% חישוב צמתים
     Intersections = calculate_intersections(AllRoads),
-    
+
     {AllRoads, Intersections}.
 
 %% יצירת רחובות משניים
@@ -188,7 +159,7 @@ generate_secondary_roads(Width, Height) ->
             width = 25
         } || Y <- [Height div 8, 3 * Height div 8, 5 * Height div 8, 7 * Height div 8]
     ],
-    
+
     %% רחובות אנכיים משניים
     VerticalSecondary = [
         #road{
@@ -199,7 +170,7 @@ generate_secondary_roads(Width, Height) ->
             width = 25
         } || X <- [Width div 8, 3 * Width div 8, 5 * Width div 8, 7 * Width div 8]
     ],
-    
+
     HorizontalSecondary ++ VerticalSecondary.
 
 %% יצירת רחובות מגורים קטנים
@@ -212,7 +183,7 @@ generate_residential_roads(Width, Height) ->
             {X, Y}
         ) || X <- [1,2,3,4,5,6,7,8], Y <- [1,2,3,4,5,6,7,8]
     ]),
-    
+
     %% מסננים רחובות קצרים מדי
     [R || R <- ResRoads, road_length(R) > 30].
 
@@ -222,13 +193,17 @@ generate_block_roads(TopLeft, BottomRight, BlockID) ->
     {X2, Y2} = BottomRight,
     BlockWidth = X2 - X1,
     BlockHeight = Y2 - Y1,
-    
+
     %% רק אם הבלוק גדול מספיק
     if
         BlockWidth > 60, BlockHeight > 60 ->
+            %% התיקון כאן - יצירת שם תקין לפני ההמרה לאטום
+            {BlockX, BlockY} = BlockID,
+            RoadIDStr = "res_" ++ integer_to_list(BlockX) ++ "_" ++ integer_to_list(BlockY) ++ "_mid",
+
             %% רחוב אופקי במרכז הבלוק
             MidRoad = #road{
-                id = list_to_atom(io_lib:format("res_~p_mid", [BlockID])),
+                id = list_to_atom(RoadIDStr),
                 type = residential,
                 start_point = {X1 + 15, Y1 + BlockHeight div 2},
                 end_point = {X2 - 15, Y1 + BlockHeight div 2},
@@ -239,6 +214,7 @@ generate_block_roads(TopLeft, BottomRight, BlockID) ->
             []
     end.
 
+
 %% חישוב אורך כביש
 road_length(#road{start_point = {X1, Y1}, end_point = {X2, Y2}}) ->
     math:sqrt(math:pow(X2 - X1, 2) + math:pow(Y2 - Y1, 2)).
@@ -247,12 +223,12 @@ road_length(#road{start_point = {X1, Y1}, end_point = {X2, Y2}}) ->
 calculate_intersections(Roads) ->
     %% מצא את כל נקודות החיתוך בין כבישים
     Intersections = lists:flatten([
-        find_intersection(R1, R2) || 
-        R1 <- Roads, 
-        R2 <- Roads, 
+        find_intersection(R1, R2) ||
+        R1 <- Roads,
+        R2 <- Roads,
         R1#road.id < R2#road.id  % למנוע כפילויות
     ]),
-    
+
     %% מסנן nulls
     [I || I <- Intersections, I =/= null].
 
@@ -262,13 +238,13 @@ find_intersection(Road1, Road2) ->
     {X1b, Y1b} = Road1#road.end_point,
     {X2a, Y2a} = Road2#road.start_point,
     {X2b, Y2b} = Road2#road.end_point,
-    
+
     %% בדיקה פשוטה - אם אחד אופקי והשני אנכי
     IsHorizontal1 = abs(Y1b - Y1a) < 5,
     IsVertical1 = abs(X1b - X1a) < 5,
     IsHorizontal2 = abs(Y2b - Y2a) < 5,
     IsVertical2 = abs(X2b - X2a) < 5,
-    
+
     if
         IsHorizontal1 andalso IsVertical2 ->
             %% Road1 אופקי, Road2 אנכי
@@ -334,23 +310,23 @@ place_businesses(NumBusinesses, Roads, Zones, Width, Height) ->
         {pharmacy, "בית מרקחת", small},
         {bank, "סניף בנק", medium}
     ],
-    
+
     %% מקם עסקים לאורך כבישים ראשיים ובאזורים מסחריים
     MainRoads = [R || R <- Roads, R#road.type == main],
     CommercialZones = maps:get(commercial, Zones, []),
-    
+
     {Businesses, _} = lists:mapfoldl(fun(Index, UsedLocations) ->
         {Type, Name, Size} = lists:nth((Index rem length(BusinessTypes)) + 1, BusinessTypes),
-        
+
         %% מצא מיקום מתאים
         Location = find_business_location(
-            MainRoads, 
-            CommercialZones, 
+            MainRoads,
+            CommercialZones,
             UsedLocations,
             Width,
             Height
         ),
-        
+
         Business = #business{
             id = list_to_atom("business_" ++ integer_to_list(Index)),
             location = Location,
@@ -358,10 +334,10 @@ place_businesses(NumBusinesses, Roads, Zones, Width, Height) ->
             type = Type,
             size = Size
         },
-        
+
         {Business, [Location | UsedLocations]}
     end, [], lists:seq(1, NumBusinesses)),
-    
+
     Businesses.
 
 %% מציאת מיקום מתאים לבית עסק
@@ -374,10 +350,10 @@ find_business_location(Roads, CommercialZones, UsedLocations, Width, Height) ->
         [] ->
             []
     end,
-    
+
     %% אם לא מצאנו באזור מסחרי, נסה ליד כביש ראשי
     AllAttempts = Attempts ++ generate_roadside_locations(Roads, 20),
-    
+
     %% מצא מיקום שלא תפוס
     find_valid_location(AllAttempts, UsedLocations, 50, {Width div 2, Height div 2}).
 
@@ -388,12 +364,12 @@ generate_roadside_locations(Roads, Count) ->
             Road = lists:nth(rand:uniform(length(Roads)), Roads),
             {X1, Y1} = Road#road.start_point,
             {X2, Y2} = Road#road.end_point,
-            
+
             %% נקודה אקראית לאורך הכביש
             T = rand:uniform(),
             X = round(X1 + T * (X2 - X1)),
             Y = round(Y1 + T * (Y2 - Y1)),
-            
+
             %% הזז מעט הצידה מהכביש
             Offset = Road#road.width div 2 + 20,
             [
@@ -406,18 +382,18 @@ generate_roadside_locations(Roads, Count) ->
     ]).
 
 %% ===================================================================
-%% House Placement  
+%% House Placement
 %% ===================================================================
 
 %% מיקום בתים
 place_houses(NumHouses, Roads, Businesses, Zones, Width, Height) ->
     %% אסוף את כל המיקומים התפוסים
     BusinessLocations = [B#business.location || B <- Businesses],
-    
+
     %% מיין כבישי מגורים
     ResidentialRoads = [R || R <- Roads, R#road.type == residential orelse R#road.type == secondary],
     ResidentialZones = maps:get(residential, Zones, []),
-    
+
     %% מקם בתים
     {Houses, _} = lists:mapfoldl(fun(Index, UsedLocations) ->
         %% מצא מיקום מתאים
@@ -428,51 +404,53 @@ place_houses(NumHouses, Roads, Businesses, Zones, Width, Height) ->
             Width,
             Height
         ),
-        
+
         %% גודל אקראי לבית
         Size = case rand:uniform(3) of
             1 -> small;
             2 -> medium;
             3 -> large
         end,
-        
+
         House = #house{
             id = list_to_atom("house_" ++ integer_to_list(Index)),
             location = Location,
             address = generate_address(Location, Index),
             size = Size
         },
-        
+
         {House, [Location | UsedLocations]}
     end, [], lists:seq(1, NumHouses)),
-    
+
     Houses.
 
 %% מציאת מיקום מתאים לבית
 find_house_location(Roads, ResidentialZones, UsedLocations, Width, Height) ->
     %% יצירת רשת של מיקומים אפשריים בשכונות מגורים
     GridPoints = generate_residential_grid(ResidentialZones),
-    
+
     %% הוסף נקודות לאורך כבישי מגורים
     RoadPoints = generate_roadside_locations(Roads, 50),
-    
+
     AllPoints = GridPoints ++ RoadPoints,
-    
+
     %% מצא מיקום פנוי
     find_valid_location(AllPoints, UsedLocations, 25, {Width div 2, Height div 2}).
 
 %% יצירת רשת נקודות בשכונת מגורים
-generate_residential_grid([{X, Y, W, H}|_]) ->
+generate_residential_grid([{X, Y, W, H}|T]) ->
     %% יצירת רשת אחידה בתוך האזור
     GridSpacing = 35,  % מרחק בין בתים
     XPoints = lists:seq(X + 20, X + W - 20, GridSpacing),
     YPoints = lists:seq(Y + 20, Y + H - 20, GridSpacing),
-    
+
     %% הוסף רעש קטן למיקום כל בית
-    [{XP + rand:uniform(10) - 5, YP + rand:uniform(10) - 5} || 
-     XP <- XPoints, YP <- YPoints];
+    CurrentZonePoints = [{XP + rand:uniform(10) - 5, YP + rand:uniform(10) - 5} ||
+     XP <- XPoints, YP <- YPoints],
+    CurrentZonePoints ++ generate_residential_grid(T);
 generate_residential_grid([]) ->
     [].
+
 
 %% מציאת מיקום תקף (לא חופף)
 find_valid_location([Point|Rest], UsedLocations, MinDistance, Default) ->
@@ -510,7 +488,7 @@ save_city_data(City) ->
         _ ->
             ok
     end,
-    
+
     %% שמור את העיר
     ets:insert(city_data, {current_city, City}),
     ok.
@@ -529,14 +507,14 @@ find_nearest_road_point({X, Y}, Roads) ->
             true -> {MinDist, BestPoint}
         end
     end, {999999, {X, Y}}, Roads),
-    
+
     NearestPoint.
 
 %% מרחק מנקודה לכביש
 point_to_road_distance({PX, PY}, Road) ->
     {X1, Y1} = Road#road.start_point,
     {X2, Y2} = Road#road.end_point,
-    
+
     %% חשב את הנקודה הקרובה ביותר על הקו
     L2 = math:pow(X2 - X1, 2) + math:pow(Y2 - Y1, 2),
     if

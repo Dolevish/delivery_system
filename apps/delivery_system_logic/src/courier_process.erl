@@ -1,6 +1,7 @@
 %%%-------------------------------------------------------------------
 %% @doc courier process representing a single courier, implemented as a state machine.
 %%      Responsible for simulating its movement and managing its state (available, delivering, etc.).
+%%      FIXED: Now properly accepts CourierData with initial location
 %%%-------------------------------------------------------------------
 -module(courier_process).
 -behaviour(gen_statem).
@@ -19,8 +20,9 @@
 
 %% Starts the courier process.
 %% The gen_statem will be registered under the unique identifier of the courier.
-start_link(CourierID) ->
-    gen_statem:start_link({local, CourierID}, ?MODULE, [CourierID], []).
+start_link(CourierData) ->
+    CourierID = maps:get(id, CourierData),
+    gen_statem:start_link({local, CourierID}, ?MODULE, [CourierData], []).
 
 
 %% Defines the callback_mode.
@@ -29,12 +31,16 @@ callback_mode() ->
     state_functions.
 
 
-%% Initializes the state machine with the given CourierID.
-init([CourierID]) ->
-    io:format("Courier statem ~p started.~n", [CourierID]),
+%% Initializes the state machine with the given CourierData.
+init([CourierData]) ->
+    CourierID = maps:get(id, CourierData),
+    InitialLocation = maps:get(location, CourierData, {0, 0}), 
+    
+    io:format("Courier statem ~p started at location ~p.~n", [CourierID, InitialLocation]),
+    
     %% The initial state is 'available'.
-    %% The state's Data will contain information about the courier.
-    {ok, available, #{id => CourierID, location => {0,0}}}.
+    %% The state's Data will contain information about the courier including the initial location.
+    {ok, available, #{id => CourierID, location => InitialLocation}}.
 
 
 
@@ -53,8 +59,8 @@ available(cast, {assign_job, JobData}, Data) ->
     CustomerLocation = maps:get(customer_location, JobData),
     CurrentLocation = maps:get(location, Data),
     
-    io:format("Courier ~p assigned to order ~p, driving to business at ~p~n", 
-              [CourierID, OrderID, BusinessLocation]),
+    io:format("Courier ~p assigned to order ~p, driving from ~p to business at ~p~n", 
+              [CourierID, OrderID, CurrentLocation, BusinessLocation]),
 
     %% Calculate travel time to the business
     TravelTime = calculate_travel_time(CurrentLocation, BusinessLocation),

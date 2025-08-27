@@ -1,5 +1,6 @@
 %%%-------------------------------------------------------------------
 %% @doc supervisor for managing individual courier processes.
+%%      FIXED: Now passes complete CourierData to each courier process
 %% @end
 %%%-------------------------------------------------------------------
 -module(courier_process_sup).
@@ -13,13 +14,16 @@ start_link(InitialCouriers) ->
 
 init([InitialCouriers]) ->
     SupFlags = #{
-        strategy => one_for_one
+        strategy => one_for_one,
+        intensity => 5,
+        period => 10     
     },
 
+ 
     ChildSpecs = [
         #{
             id => maps:get(id, CourierData), %% Identifier for the courier process
-            start => {courier_process, start_link, [maps:get(id, CourierData)]}, %% Pass the courier ID to the process
+            start => {courier_process, start_link, [CourierData]}, %% Passes all CourierData
             restart => permanent,
             type => worker
         }

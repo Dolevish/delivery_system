@@ -187,9 +187,12 @@ process_external_order(OrderData, Source, State) ->
         received_at => erlang:system_time(millisecond),
         api_version => "1.0"
     },
+
+    OrderWithId = ensure_order_id(EnrichedOrder),
+
     
     %% ולידציה של ההזמנה
-    case order_validator:validate_order(EnrichedOrder) of
+    case order_validator:validate_order(OrderWithId) of
         {ok, ValidatedOrder} ->
             %% יצירת ID אם לא קיים
             FinalOrder = ensure_order_id(ValidatedOrder),

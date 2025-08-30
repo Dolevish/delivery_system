@@ -1,7 +1,8 @@
 %%%-------------------------------------------------------------------
-%% @doc order_config - מודול לניהול קונפיגורציה גמישה
-%%      מנהל הגדרות כמו מרווחי זמן, טווחי מיקומים, סוגי עסקים
-%%      וטעינה מקבצי קונפיגורציה או ארגומנטים של המערכת
+%% @doc order_config - module for flexible configuration management
+%%      Manages settings such as time intervals, location ranges,
+%%      business types, and loading from configuration files or
+%%      system arguments
 %% @end
 %%%-------------------------------------------------------------------
 -module(order_config).
@@ -101,6 +102,7 @@ init([]) ->
         config_file = ConfigFile,
         last_reload = erlang:system_time(second)
     }}.
+
 
 handle_call(get_generation_interval, _From, State) ->
     Interval = maps:get(generation_interval_ms, State#state.config, 5000),
@@ -220,8 +222,12 @@ terminate(_Reason, State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+
+
+
+
 %% ===================================================================
-%% פונקציות עזר פנימיות
+%% Functions helper
 %% ===================================================================
 
 %% קבלת נתיב קובץ קונפיגורציה

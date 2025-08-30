@@ -1,6 +1,5 @@
 %%%-------------------------------------------------------------------
 %% Delivery_system_orders top level supervisor.
-%% עכשיו כולל את כל המודולים החדשים לניהול מתקדם של הזמנות
 %%%-------------------------------------------------------------------
 
 -module(delivery_system_orders_sup).
@@ -20,7 +19,7 @@ start_link() ->
 init([]) ->
     %% supervisor flags
     SupFlags = #{
-        strategy => one_for_all,  %% שינוי לone_for_all כי המודולים תלויים זה בזה
+        strategy => one_for_all,  %% one for all behavior
         intensity => 5,
         period => 10
     },

@@ -16,7 +16,6 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-
 init([]) ->
     % supervisor flags
     SupFlags = #{
@@ -27,6 +26,13 @@ init([]) ->
 
     % child specifications
     ChildSpecs = [
+        % config_manager - manages system configuration
+        #{
+            id => config_manager,
+            start => {config_manager, start_link, []},
+            restart => permanent,
+            type => worker
+        },
         % graphics_server responsible for managing the display window.
         #{
             id => graphics_server,

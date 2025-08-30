@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %% @doc supervisor for managing individual courier processes.
-%%      FIXED: Now passes complete CourierData to each courier process
+%%      Uses simple_one_for_one strategy for dynamic child creation
 %% @end
 %%%-------------------------------------------------------------------
 -module(courier_process_sup).
@@ -9,25 +9,23 @@
 -export([start_link/1]).
 -export([init/1]).
 
-start_link(InitialCouriers) ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, [InitialCouriers]).
+start_link(_InitialCouriers) ->
+    %% Ignore initial couriers - will be added dynamically
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-init([InitialCouriers]) ->
+init([]) ->
     SupFlags = #{
-        strategy => one_for_one,
+        strategy => simple_one_for_one,
         intensity => 5,
         period => 10     
     },
 
- 
-    ChildSpecs = [
-        #{
-            id => maps:get(id, CourierData), %% Identifier for the courier process
-            start => {courier_process, start_link, [CourierData]}, %% Passes all CourierData
-            restart => permanent,
-            type => worker
-        }
-        || CourierData <- InitialCouriers %% Iterate over each courier's data
-    ],
+    %% Child template for dynamic courier processes
+    ChildSpec = #{
+        id => courier_process,
+        start => {courier_process, start_link, []},
+        restart => permanent,
+        type => worker
+    },
 
-    {ok, {SupFlags, ChildSpecs}}.
+    {ok, {SupFlags, [ChildSpec]}}.

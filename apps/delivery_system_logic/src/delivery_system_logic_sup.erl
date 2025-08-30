@@ -25,14 +25,8 @@ init([]) ->
         period => 10
     },
 
-
-
-     % Creates an initial list of couriers (currently "dummy", will be read from config file later)
-    InitialCouriers = [
-        #{id => courier_1, location => {10, 20}},
-        #{id => courier_2, location => {50, 60}},
-        #{id => courier_3, location => {30, 45}}
-    ],
+    % Start with empty couriers list - will be initialized from GUI
+    InitialCouriers = [],
 
     % Child specifications
     ChildSpecs = [

@@ -2,17 +2,16 @@
 %% @doc courier manager responsible for managing courier assignments.
 %%      It handles the assignment and release of couriers for deliveries.
 %%      manage two ETS tables: one for available couriers and one for busy couriers and a queue for waiting orders.
-%%      FIXED: Added process monitoring to handle courier process failures
-%% @end
+%%      Added process monitoring to handle courier process failures
+%%      Replaced the 'available_couriers' ETS table with an internal queue for fair (FIFO) and efficient dispatching.
 %%%-------------------------------------------------------------------
 -module(courier_manager).
 
 -behaviour(gen_server).
 
 %% API
--export([start_link/1]).
--export([add_to_queue/1, release_courier/1]). 
-
+-export([start_link/0, start_link/1]).
+-export([add_to_queue/1, release_courier/1, initialize_couriers/1]).
 
 %% gen_server Callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -20,7 +19,8 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {
-    available_tid, 
+    %% The ETS table ID for available couriers is replaced by a queue.
+    available_couriers :: queue:queue(), 
     busy_tid, 
     waiting_orders :: queue:queue(),
     monitors = #{} :: #{reference() => atom()}  % MonitorRef -> CourierID
@@ -35,6 +35,13 @@
 start_link(InitialCouriers) ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, InitialCouriers, []).
 
+%% Starts with empty courier list (will be initialized later)
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+%% Initialize couriers after the manager has started
+initialize_couriers(CourierData) ->
+    gen_server:cast(?SERVER, {initialize_couriers, CourierData}).
 
 
 %% Releases a courier after completing a task.
@@ -55,19 +62,16 @@ add_to_queue(OrderData) ->
 
 %% Initializes the gen_server state.
 init(InitialCouriers) ->
-    
-    %% Create ETS tables to manage couriers.
-    AvailableTID = ets:new(available_couriers, [set, named_table, public]),
+
+    %% No longer creating an ETS table for available couriers.
+    %% AvailableTID = ets:new(available_couriers, [set, named_table, public]),
     BusyTID = ets:new(busy_couriers, [set, named_table, public]),
 
     %% Table for active orders
     ets:new(active_orders, [set, named_table, public]),
 
-    %% Add initial couriers to the available table - each with a unique key.
-    lists:foreach(fun(CourierData) ->
-        CourierID = maps:get(id, CourierData),
-        ets:insert(AvailableTID, {CourierID, CourierData})  % Unique key.
-    end, InitialCouriers),
+    %% Create a new queue and populate it with the initial couriers.
+    AvailableQueue = queue:from_list(InitialCouriers),
 
     io:format("Courier manager started with ~p couriers.~n", [length(InitialCouriers)]),
 
@@ -76,7 +80,8 @@ init(InitialCouriers) ->
 
     %% The state now includes an empty monitors map
     {ok, #state{
-        available_tid = AvailableTID, 
+        %% The state now holds the queue itself.
+        available_couriers = AvailableQueue, 
         busy_tid = BusyTID, 
         waiting_orders = WaitingOrdersQueue,
         monitors = #{}
@@ -92,6 +97,24 @@ handle_call(_Request, _From, State) ->
 
 %% Handles asynchronous casts (gen_server:cast):
 
+
+%% Initialize couriers
+handle_cast({initialize_couriers, CourierData}, State = #state{available_couriers = AvailQ}) ->
+    io:format("Courier manager: Initializing ~p couriers~n", [length(CourierData)]),
+    
+    %% Add couriers to the available queue instead of the ETS table.
+    NewAvailQ = lists:foldl(fun(Data, Q) ->
+        queue:in(Data, Q)
+    end, AvailQ, CourierData),
+    
+    %% Start courier processes via supervisor
+    lists:foreach(fun(Data) ->
+        supervisor:start_child(courier_process_sup, [Data])
+    end, CourierData),
+    
+    {noreply, State#state{available_couriers = NewAvailQ}};
+
+
 %% Adding a new order to the waiting queue.
 handle_cast({add_to_queue, OrderData}, State = #state{waiting_orders = Q}) ->
     io:format("Courier manager: Adding order ~p to the waiting queue.~n", [maps:get(id, OrderData)]),
@@ -105,7 +128,7 @@ handle_cast({add_to_queue, OrderData}, State = #state{waiting_orders = Q}) ->
 
 
 %% Releases a courier and makes it available for new tasks.
-handle_cast({release_courier, CourierID}, State = #state{available_tid = AvailTID, busy_tid = BusyTID, monitors = Monitors}) ->
+handle_cast({release_courier, CourierID}, State = #state{available_couriers = AvailQ, busy_tid = BusyTID, monitors = Monitors}) ->
     io:format("Courier manager: Courier ~p has been released.~n", [CourierID]),
 
     %% Cancel the monitor if it exists
@@ -127,13 +150,13 @@ handle_cast({release_courier, CourierID}, State = #state{available_tid = AvailTI
             %% Delete the order from the active_orders table - it has been completed successfully
             ets:delete(active_orders, OrderID),
 
-            %% Adding back to the available table
-            ets:insert(AvailTID, {CourierID, CourierData}),
+            %% -- MODIFIED: Adding back to the available queue (at the end for FIFO).
+            NewAvailQ = queue:in(CourierData, AvailQ),
 
             io:format("Courier manager: Courier ~p is now available for new orders.~n", [CourierID]),
 
-            %% Update state with new monitors map
-            NewState = State#state{monitors = NewMonitors},
+            %% Update state with new monitors map and the updated queue
+            NewState = State#state{monitors = NewMonitors, available_couriers = NewAvailQ},
 
             %% Trying to dispatch the courier for a new task from the queue
             try_dispatch(NewState);
@@ -153,7 +176,7 @@ handle_cast(_Msg, State) ->
 
 %% DOWN message handler - monitor process termination
 handle_info({'DOWN', MonRef, process, _Pid, Reason}, 
-            State = #state{available_tid = AvailTID, busy_tid = BusyTID, monitors = Monitors}) ->
+            State = #state{available_couriers = AvailQ, busy_tid = BusyTID, monitors = Monitors}) ->
 
     %% Find out which courier it was
     case maps:get(MonRef, Monitors, undefined) of
@@ -170,8 +193,9 @@ handle_info({'DOWN', MonRef, process, _Pid, Reason},
                     %% Remove from busy
                     ets:delete(BusyTID, CourierID),
 
-                    %% Return to available (the courier will be restarted by the supervisor)
-                    ets:insert(AvailTID, {CourierID, CourierData}),
+                    %% Return the courier to the available queue.
+                    %% We add it to the front to prioritize its restart.
+                    NewAvailQ = queue:in_r(CourierData, AvailQ),
                     
                     io:format("Courier ~p recovered and marked as available. Order ~p will be reassigned.~n", 
                               [CourierID, OrderID]),
@@ -183,22 +207,26 @@ handle_info({'DOWN', MonRef, process, _Pid, Reason},
                             NewQ = queue:in_r(OrderData, State#state.waiting_orders), %%Insert at the front
                             ets:delete(active_orders, OrderID),
                             io:format("Order ~p returned to queue for reassignment.~n", [OrderID]),
-                            NewStateWithOrder = State#state{waiting_orders = NewQ},
+                            NewStateWithOrder = State#state{waiting_orders = NewQ, available_couriers = NewAvailQ},
                             try_dispatch(NewStateWithOrder);
                         [] ->
                             %% No information about the order - just log and continue
                             io:format("Warning: Could not recover order ~p data.~n", [OrderID]),
-                            ok
+                             {noreply, State#state{available_couriers = NewAvailQ}}
                     end;
                 [] ->
                     %% The courier was not in the busy table, probably already released
-                    ok
+                    ok,
+                    {noreply, State}
             end,
 
             %% Remove the monitor from the map
             NewMonitors = maps:remove(MonRef, Monitors),
-            {noreply, State#state{monitors = NewMonitors}}
+            {noreply, State#state{monitors = NewMonitors}};
+        _ ->
+             {noreply, State}
     end;
+
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -223,75 +251,76 @@ find_monitor_by_courier(CourierID, Monitors) ->
     end.
 
 %% Attempts to dispatch available couriers to waiting orders.
-try_dispatch(State = #state{waiting_orders = Q, monitors = Monitors}) ->
-    %% Check if there are any waiting orders
-    case queue:is_empty(Q) of
-        true ->
+try_dispatch(State = #state{waiting_orders = Q, available_couriers = AvailQ, monitors = Monitors}) ->
+    %% -- MODIFIED: Check if both queues are not empty.
+    case {queue:is_empty(Q), queue:is_empty(AvailQ)} of
+        {true, _} ->
             %% No waiting orders
-            NumAvailable = ets:info(available_couriers, size),
+             NumAvailable = queue:len(AvailQ),
             if 
                 NumAvailable > 0 ->
                     io:format("Courier manager: ~p couriers available, no orders in queue~n", [NumAvailable]);
                 true -> ok
             end,
             {noreply, State};
-        false ->
-            %% There are waiting orders - looking for an available courier
-            case ets:tab2list(available_couriers) of  %פעולה יקרה - לשנות בעתיד עלולה לתקוע את המערכת
-                [] ->
-                    %% No available couriers
-                    QueueLength = queue:len(Q),
-                    io:format("Courier manager: No available couriers, orders waiting in queue: ~p~n", [QueueLength]),
-                    {noreply, State};
-                [{CourierID, CourierData} | _] -> 
-                    %% There is at least one available courier - take the first one
+        {_, true} ->
+            %% No available couriers
+            QueueLength = queue:len(Q),
+            io:format("Courier manager: No available couriers, orders waiting in queue: ~p~n", [QueueLength]),
+            {noreply, State};
+        {false, false} -> 
+            %% There is an order and an available courier.
 
-                    %% Remove the first order from the queue (FIFO)
-                    {{value, OrderData}, NewQ} = queue:out(Q),
+            %% Get courier from the front of the queue.
+            {{value, CourierData}, NewAvailQ} = queue:out(AvailQ),
+            CourierID = maps:get(id, CourierData),
 
-                    OrderID = maps:get(id, OrderData),
+            %% Remove the first order from the queue (FIFO)
+            {{value, OrderData}, NewQ} = queue:out(Q),
 
-                    %% Move the courier from available to busy
-                    ets:delete(available_couriers, CourierID),
-                    ets:insert(busy_couriers, {CourierID, CourierData, OrderID}),
+            OrderID = maps:get(id, OrderData),
 
-                    io:format("Courier manager: Dispatching courier ~p for order ~p.~n", [CourierID, OrderID]),
+            %% Move the courier from available to busy
+            ets:insert(busy_couriers, {CourierID, CourierData, OrderID}),
 
-                    %% Create job data for the courier
-                    JobData = #{
-                        order_id => OrderID,
-                        business_location => maps:get(business_location, OrderData),
-                        customer_location => maps:get(customer_location, OrderData)
+            io:format("Courier manager: Dispatching courier ~p for order ~p.~n", [CourierID, OrderID]),
+
+            %% Create job data for the courier
+            JobData = #{
+                order_id => OrderID,
+                business_location => maps:get(business_location, OrderData),
+                customer_location => maps:get(customer_location, OrderData)
+            },
+
+            %% Send job data to the courier process
+            case whereis(CourierID) of
+                undefined ->
+                    io:format("Error: Courier process ~p not found!~n", [CourierID]),
+                    %% Return courier to the front of the available queue and the order to the front of the orders queue.
+                    RestoredAvailQ = queue:in_r(CourierData, NewAvailQ),
+                    RestoredOrdersQ = queue:in_r(OrderData, NewQ),
+                    ets:delete(busy_couriers, CourierID),
+                    NewStateWithOrder = State#state{waiting_orders = RestoredOrdersQ, available_couriers = RestoredAvailQ},
+                    {noreply, NewStateWithOrder};
+                CourierPid ->
+                    %% Save the order in the active_orders table
+                    ets:insert(active_orders, {OrderID, OrderData}),
+
+                    %% Create a monitor for the courier process
+                    MonRef = erlang:monitor(process, CourierPid),
+                    NewMonitors = maps:put(MonRef, CourierID, Monitors),
+                    
+                    %% Send message to the courier process
+                    gen_statem:cast(CourierPid, {assign_job, JobData}),
+
+                    %% Update the state with the new queue and monitors
+                    NewState = State#state{
+                        waiting_orders = NewQ,
+                        available_couriers = NewAvailQ,
+                        monitors = NewMonitors
                     },
 
-                    %% Send job data to the courier process
-                    case whereis(CourierID) of
-                        undefined ->
-                            io:format("Error: Courier process ~p not found!~n", [CourierID]),
-                            %% Return the courier to available and the order to the queue
-                            ets:insert(available_couriers, {CourierID, CourierData}),
-                            ets:delete(busy_couriers, CourierID),
-                            NewStateWithOrder = State#state{waiting_orders = queue:in_r(OrderData, NewQ)},
-                            {noreply, NewStateWithOrder};
-                        CourierPid ->
-                            %% Save the order in the active_orders table
-                            ets:insert(active_orders, {OrderID, OrderData}),
-
-                            %% Create a monitor for the courier process
-                            MonRef = erlang:monitor(process, CourierPid),
-                            NewMonitors = maps:put(MonRef, CourierID, Monitors),
-                            
-                            %% Send message to the courier process
-                            gen_statem:cast(CourierPid, {assign_job, JobData}),
-
-                            %% Update the state with the new queue and monitors
-                            NewState = State#state{
-                                waiting_orders = NewQ,
-                                monitors = NewMonitors
-                            },
-
-                            %% Call the function again to check for more couriers and orders
-                            try_dispatch(NewState)
-                    end
+                    %% Call the function again to check for more couriers and orders
+                    try_dispatch(NewState)
             end
     end.
